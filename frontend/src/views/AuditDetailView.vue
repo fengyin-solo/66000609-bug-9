@@ -1,28 +1,35 @@
 <template>
-  <div class="audit">
-    <h2>智能合约安全审计</h2>
-    <div class="upload-section">
-      <textarea v-model="contractCode" class="code-editor" placeholder="// 粘贴 Solidity 合约代码..."></textarea>
-      <div class="toolbar">
-        <input v-model="filename" placeholder="文件名.sol" class="filename-input" />
-        <button @click="runAudit" class="btn-primary" :disabled="!contractCode || isAuditing">
-          {{ isAuditing ? "审计中..." : "开始审计" }}
-        </button>
-      </div>
-      <div v-if="errorMsg" class="error-msg">{{ errorMsg }}</div>
+  <div class="detail">
+    <div class="top-bar">
+      <button class="btn-back" @click="goBack">← 返回历史</button>
     </div>
-    <div v-if="result" class="result-section">
-      <div class="result-actions">
-        <router-link :to="`/history/${result.id}`" class="btn-link">查看历史详情</router-link>
+
+    <div v-if="loading" class="state-tip">加载中...</div>
+    <div v-else-if="errorMsg" class="state-tip error">{{ errorMsg }}</div>
+
+    <template v-else-if="result">
+      <div class="detail-header">
+        <h2>{{ result.filename }}</h2>
+        <div class="detail-meta">
+          <span class="history-time">{{ result.timestamp }}</span>
+          <span class="history-score" :class="scoreLevel(result.score)">{{ result.score }}分</span>
+        </div>
       </div>
+
       <div class="score-card" :class="scoreClass">
         <div class="score-label">安全评分</div>
         <div class="score-value">{{ result.score }}</div>
         <div class="score-grade">{{ scoreGrade }}</div>
       </div>
+
+      <div v-if="result.code" class="code-section">
+        <h3>合约代码</h3>
+        <pre class="code-block">{{ result.code }}</pre>
+      </div>
+
       <div class="vulnerabilities">
         <h3>发现漏洞 ({{ result.vulnerabilities.length }})</h3>
-        <div v-for="v in result.vulnerabilities" :key="v.line + v.type" class="vuln-card" :class="v.severity">
+        <div v-for="(v, i) in result.vulnerabilities" :key="v.line + v.type + i" class="vuln-card" :class="v.severity">
           <div class="vuln-header">
             <span class="vuln-type">{{ v.type }}</span>
             <span class="vuln-severity">{{ v.severity }}</span>
@@ -31,7 +38,9 @@
           <div class="vuln-desc">{{ v.description }}</div>
           <div class="vuln-suggest">建议: {{ v.suggestion }}</div>
         </div>
+        <div v-if="result.vulnerabilities.length === 0" class="empty-tip">未发现明显漏洞模式</div>
       </div>
+
       <div v-if="result.gasIssues.length > 0" class="gas-section">
         <h3>Gas优化建议</h3>
         <div v-for="g in result.gasIssues" :key="g.functionName" class="gas-card">
@@ -40,37 +49,28 @@
           <div class="gas-suggest">{{ g.suggestion }}</div>
         </div>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue"
+import { ref, computed, onMounted } from "vue"
+import { useRouter, useRoute } from "vue-router"
 import { useAuditStore, type AuditResult } from "@/store"
 
+defineOptions({ name: "AuditDetailView" })
+
+const router = useRouter()
+const route = useRoute()
 const auditStore = useAuditStore()
 
-const contractCode = ref(`// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-
-contract SimpleBank {
-    mapping(address => uint) public balances;
-
-    function deposit() public payable {
-        balances[msg.sender] += msg.value;
-    }
-
-    function withdraw(uint amount) public {
-        require(balances[msg.sender] >= amount);
-        (bool success,) = msg.sender.call{value: amount}("");
-        require(success);
-        balances[msg.sender] -= amount;
-    }
-}`)
-const filename = ref("SimpleBank.sol")
-const isAuditing = ref(false)
+const loading = ref(false)
 const errorMsg = ref("")
 const result = ref<AuditResult | null>(null)
+
+function scoreLevel(score: number) {
+  return score >= 70 ? "high" : score >= 40 ? "medium" : "low"
+}
 
 const scoreClass = computed(() => {
   if (!result.value) return ""
@@ -87,31 +87,47 @@ const scoreGrade = computed(() => {
   return "Poor"
 })
 
-async function runAudit() {
-  isAuditing.value = true
+async function load() {
+  const id = String(route.params.id)
+  loading.value = true
   errorMsg.value = ""
   try {
-    result.value = await auditStore.uploadAndAudit(contractCode.value, filename.value.trim() || "未命名合约.sol")
+    result.value = await auditStore.fetchAudit(id)
   } catch (e: any) {
-    errorMsg.value = e?.response?.data?.detail || "审计失败，请稍后重试"
+    errorMsg.value = e?.response?.status === 404 ? "该审计记录不存在或已被删除" : "详情加载失败"
   } finally {
-    isAuditing.value = false
+    loading.value = false
   }
 }
+
+function goBack() {
+  // 从历史列表进入则返回列表（筛选条件保留在 URL query 中）；
+  // 直接打开详情页（无历史栈）时兜底跳到历史页
+  if (window.history.state && window.history.state.back) {
+    router.back()
+  } else {
+    router.push("/history")
+  }
+}
+
+onMounted(load)
 </script>
 
 <style scoped>
-.audit { max-width: 1000px; }
-.code-editor { width: 100%; height: 300px; font-family: "Fira Code", monospace; font-size: 0.875rem; padding: 1rem; border: 1px solid #d1d5db; border-radius: 8px; background: #1e1e1e; color: #d4d4d4; resize: vertical; }
-.toolbar { display: flex; gap: 1rem; margin: 1rem 0; align-items: center; }
-.filename-input { padding: 0.5rem 1rem; border: 1px solid #d1d5db; border-radius: 8px; flex: 1; }
-.btn-primary { background: #8b5cf6; color: white; border: none; padding: 0.625rem 1.5rem; border-radius: 8px; cursor: pointer; white-space: nowrap; }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.error-msg { color: #dc2626; font-size: 0.875rem; margin-top: 0.5rem; }
-.result-section { margin-top: 2rem; }
-.result-actions { margin-bottom: 1rem; }
-.btn-link { display: inline-block; padding: 0.5rem 1rem; background: #eef2ff; color: #667eea; border-radius: 8px; text-decoration: none; font-size: 0.875rem; font-weight: 500; }
-.btn-link:hover { background: #e0e7ff; }
+.detail { max-width: 1000px; }
+.top-bar { margin-bottom: 1rem; }
+.btn-back { background: #e5e7eb; border: none; padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer; font-size: 0.875rem; }
+.btn-back:hover { background: #d1d5db; }
+.state-tip { background: white; border-radius: 12px; padding: 2.5rem; text-align: center; color: #6b7280; }
+.state-tip.error { color: #dc2626; }
+.detail-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.5rem; }
+.detail-header h2 { margin: 0; }
+.detail-meta { display: flex; align-items: center; gap: 0.75rem; }
+.history-time { color: #6b7280; font-size: 0.875rem; }
+.history-score { padding: 0.25rem 0.75rem; border-radius: 8px; font-weight: 600; font-size: 0.875rem; }
+.history-score.high { background: #d1fae5; color: #065f46; }
+.history-score.medium { background: #fef3c7; color: #92400e; }
+.history-score.low { background: #fee2e2; color: #991b1b; }
 .score-card { border-radius: 16px; padding: 2rem; text-align: center; color: white; margin-bottom: 2rem; }
 .score-high { background: linear-gradient(135deg, #10b981, #059669); }
 .score-medium { background: linear-gradient(135deg, #f59e0b, #d97706); }
@@ -119,7 +135,9 @@ async function runAudit() {
 .score-label { font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem; }
 .score-value { font-size: 4rem; font-weight: 800; }
 .score-grade { font-size: 1.25rem; opacity: 0.9; }
-.vulnerabilities h3, .gas-section h3 { margin-bottom: 1rem; font-size: 1.125rem; }
+.code-section { margin-bottom: 2rem; }
+.code-section h3, .vulnerabilities h3, .gas-section h3 { margin-bottom: 1rem; font-size: 1.125rem; }
+.code-block { background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: 12px; font-family: "Fira Code", monospace; font-size: 0.8125rem; overflow-x: auto; white-space: pre; }
 .vuln-card { background: white; border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; border-left: 4px solid; }
 .vuln-card.critical { border-color: #dc2626; }
 .vuln-card.high { border-color: #f59e0b; }
@@ -131,6 +149,7 @@ async function runAudit() {
 .vuln-line { font-size: 0.8125rem; color: #6b7280; margin-bottom: 0.5rem; }
 .vuln-desc { color: #374151; margin-bottom: 0.5rem; }
 .vuln-suggest { font-size: 0.875rem; color: #6b7280; }
+.empty-tip { color: #6b7280; font-size: 0.875rem; padding: 1rem 0; }
 .gas-card { background: white; border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; }
 .gas-fn { font-weight: 600; color: #7c3aed; margin-bottom: 0.5rem; }
 .gas-info { color: #059669; font-size: 0.875rem; margin-bottom: 0.5rem; }
