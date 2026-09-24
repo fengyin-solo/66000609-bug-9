@@ -216,6 +216,8 @@ media/
 generated/
 artifacts/
 sandbox/
+backend/app/data/
+backend/app/reports/
 
 # =========================
 # Archives

@@ -12,7 +12,11 @@
         </nav>
       </aside>
       <main class="main-content">
-        <router-view />
+        <router-view v-slot="{ Component }">
+          <keep-alive :include="['HistoryView']">
+            <component :is="Component" />
+          </keep-alive>
+        </router-view>
       </main>
     </div>
   </div>
@@ -26,7 +30,7 @@ const router = useRouter()
 const title = 'Solo Project'
 
 const navRoutes = computed(() => {
-  return (router.options.routes || []).filter((r: any) => r.path !== '*')
+  return (router.options.routes || []).filter((r: any) => r.path !== '*' && !r.meta?.hidden)
 })
 </script>
 

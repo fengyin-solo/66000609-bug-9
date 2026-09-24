@@ -10,6 +10,7 @@
         </button>
       </div>
     </div>
+    <div v-if="auditError" class="audit-error">{{ auditError }}</div>
     <div v-if="result" class="result-section">
       <div class="score-card" :class="scoreClass">
         <div class="score-label">安全评分</div>
@@ -18,7 +19,7 @@
       </div>
       <div class="vulnerabilities">
         <h3>发现漏洞 ({{ result.vulnerabilities.length }})</h3>
-        <div v-for="v in result.vulnerabilities" :key="v.line + v.type" class="vuln-card" :class="v.severity">
+        <div v-for="(v, i) in result.vulnerabilities" :key="i + '-' + v.type" class="vuln-card" :class="v.severity">
           <div class="vuln-header">
             <span class="vuln-type">{{ v.type }}</span>
             <span class="vuln-severity">{{ v.severity }}</span>
@@ -29,7 +30,7 @@
       </div>
       <div v-if="result.gasIssues.length > 0" class="gas-section">
         <h3>Gas优化建议</h3>
-        <div v-for="g in result.gasIssues" :key="g.functionName" class="gas-card">
+        <div v-for="(g, i) in result.gasIssues" :key="i + '-' + g.functionName" class="gas-card">
           <div class="gas-fn">{{ g.functionName }}</div>
           <div class="gas-info">当前: {{ g.currentGas }} → 优化后: {{ g.optimizedGas }} ({{ Math.round((1-g.optimizedGas/g.currentGas)*100) }}%节省)</div>
           <div class="gas-suggest">{{ g.suggestion }}</div>
@@ -41,17 +42,20 @@
 
 <script setup lang="ts">
 import { ref, computed } from "vue"
+import { useAuditStore } from "@/store"
+
+const store = useAuditStore()
 
 const contractCode = ref(`// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
 contract SimpleBank {
     mapping(address => uint) public balances;
-    
+
     function deposit() public payable {
         balances[msg.sender] += msg.value;
     }
-    
+
     function withdraw(uint amount) public {
         require(balances[msg.sender] >= amount);
         (bool success,) = msg.sender.call{value: amount}("");
@@ -61,6 +65,7 @@ contract SimpleBank {
 }`)
 const filename = ref("SimpleBank.sol")
 const isAuditing = ref(false)
+const auditError = ref("")
 const result = ref<any>(null)
 
 const scoreClass = computed(() => {
@@ -79,39 +84,21 @@ const scoreGrade = computed(() => {
 })
 
 async function runAudit() {
+  if (!contractCode.value) return
   isAuditing.value = true
-  await new Promise(r => setTimeout(r, 1500))
-  
-  // Simulate vulnerability detection
-  const vulns = []
-  if (contractCode.value.includes("msg.sender.call")) {
-    vulns.push({
-      type: "重入攻击 (Reentrancy)",
-      severity: "critical",
-      line: contractCode.value.split("\n").findIndex(l => l.includes("msg.sender.call")) + 1,
-      description: "使用了低级的 call() 接收ETH，存在重入攻击风险。攻击者可通过恶意合约反复调用提款函数。",
-      suggestion: "使用 Checks-Effects-Interactions 模式，或使用 ReentrancyGuard 修饰符。"
-    })
+  auditError.value = ""
+  try {
+    // Call the real audit API so the result is persisted and shows up
+    // in the audit history immediately.
+    result.value = await store.uploadAndAudit(
+      contractCode.value,
+      filename.value.trim() || "contract.sol"
+    )
+  } catch (e) {
+    auditError.value = "审计请求失败，请确认后端服务已启动后重试"
+  } finally {
+    isAuditing.value = false
   }
-  if (contractCode.value.includes("require(balances")) {
-    vulns.push({
-      type: "整数溢出 (Integer Overflow)",
-      severity: "high",
-      line: 1,
-      description: "Solidity 0.8以下版本未启用溢出检查，需注意。",
-      suggestion: "使用 SafeMath 库或在 Solidity 0.8+ 环境中编译。"
-    })
-  }
-  
-  result.value = {
-    score: vulns.length === 0 ? 95 : Math.max(20, 85 - vulns.length * 25),
-    vulnerabilities: vulns,
-    gasIssues: [
-      { functionName: "deposit()", currentGas: 45000, optimizedGas: 21000, suggestion: "移除不必要的存储写入" },
-      { functionName: "withdraw()", currentGas: 52000, optimizedGas: 31000, suggestion: "使用 local 变量缓存 balances[msg.sender]" }
-    ]
-  }
-  isAuditing.value = false
 }
 </script>
 
@@ -123,6 +110,7 @@ async function runAudit() {
 .btn-primary { background: #8b5cf6; color: white; border: none; padding: 0.625rem 1.5rem; border-radius: 8px; cursor: pointer; white-space: nowrap; }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .result-section { margin-top: 2rem; }
+.audit-error { margin-top: 1rem; padding: 0.75rem 1rem; background: #fee2e2; color: #991b1b; border-radius: 8px; font-size: 0.875rem; }
 .score-card { border-radius: 16px; padding: 2rem; text-align: center; color: white; margin-bottom: 2rem; }
 .score-high { background: linear-gradient(135deg, #10b981, #059669); }
 .score-medium { background: linear-gradient(135deg, #f59e0b, #d97706); }
